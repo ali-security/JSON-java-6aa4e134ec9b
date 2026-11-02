@@ -117,4 +117,34 @@ public class Util {
             );
         }
     }
+
+    /**
+     * Runs the given task on a dedicated thread with a fixed 8 MB stack and
+     * returns whatever the task threw, or null if it completed normally.
+     * Used by the deep-nesting regression tests so their outcome does not
+     * depend on the stack size of the test runner thread.
+     * @param task the work to run
+     * @return the Throwable raised by the task, or null if none was raised
+     */
+    public static Throwable runWithLargeStack(final Runnable task) {
+        final Throwable[] thrown = new Throwable[1];
+        Thread worker = new Thread(null, new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    task.run();
+                } catch (Throwable t) {
+                    thrown[0] = t;
+                }
+            }
+        }, "deep-nesting-test", 8L * 1024L * 1024L);
+        worker.start();
+        try {
+            worker.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting for the deep-nesting test thread", e);
+        }
+        return thrown[0];
+    }
 }
