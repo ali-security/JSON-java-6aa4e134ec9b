@@ -225,13 +225,17 @@ public class JSONObjectTest {
      */
     @Test
     public void unquotedText() {
-        String str = "{key1:value1, key2:42}";
+        String str = "{key1:value1, key2:42, 1.2 : 3.4, -7e5 : something!}";
         JSONObject jsonObject = new JSONObject(str);
         String textStr = jsonObject.toString();
         assertTrue("expected key1", textStr.contains("\"key1\""));
         assertTrue("expected value1", textStr.contains("\"value1\""));
         assertTrue("expected key2", textStr.contains("\"key2\""));
         assertTrue("expected 42", textStr.contains("42"));
+        assertTrue("expected 1.2", textStr.contains("\"1.2\""));
+        assertTrue("expected 3.4", textStr.contains("3.4"));
+        assertTrue("expected -7E+5", textStr.contains("\"-7E+5\""));
+        assertTrue("expected something!", textStr.contains("\"something!\""));
     }
     
     @Test
@@ -2147,6 +2151,51 @@ public class JSONObjectTest {
                     e.getMessage());
         }
         try {
+            // key is a nested map
+            String str = "{{\"foo\": \"bar\"}: \"baz\"}";
+            assertNull("Expected an exception",new JSONObject(str));
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                "Missing value at 1 [character 2 line 1]",
+                e.getMessage());
+        }
+        try {
+            // key is a nested array containing a map
+            String str = "{\"a\": 1, [{\"foo\": \"bar\"}]: \"baz\"}";
+            assertNull("Expected an exception",new JSONObject(str));
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                "Missing value at 9 [character 10 line 1]",
+                e.getMessage());
+        }
+        try {
+            // key contains }
+            String str = "{foo}: 2}";
+            assertNull("Expected an exception",new JSONObject(str));
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                "Expected a ':' after a key at 5 [character 6 line 1]",
+                e.getMessage());
+        }
+        try {
+            // key contains ]
+            String str = "{foo]: 2}";
+            assertNull("Expected an exception",new JSONObject(str));
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                "Expected a ':' after a key at 5 [character 6 line 1]",
+                e.getMessage());
+        }
+        try {
+            // \0 after ,
+            String str = "{\"myKey\":true, \0\"myOtherKey\":false}";
+            assertNull("Expected an exception",new JSONObject(str));
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                    "A JSONObject text must end with '}' at 15 [character 16 line 1]",
+                    e.getMessage());
+        }
+        try {
             // append to wrong key
             String str = "{\"myKey\":true, \"myOtherKey\":false}";
             JSONObject jsonObject = new JSONObject(str);
@@ -3397,5 +3446,105 @@ public class JSONObjectTest {
         JSONObject json_input = new JSONObject(tokener);
         assertNotNull(json_input);
         fail("Excepected Exception.");
+    }
+
+    /**
+     * A JSONArray must not be accepted as a key, neither as the first key
+     * nor after a ',' separator (CVE-2023-5072).
+     */
+    @Test
+    public void nestedArrayAsKeyIsRejected() {
+        try {
+            new JSONObject("{\"a\": 1, [\"foo\"]: \"baz\"}");
+            fail("Expected an exception");
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                    "Missing value at 9 [character 10 line 1]",
+                    e.getMessage());
+        }
+        try {
+            new JSONObject("{[\"foo\"]: \"baz\"}");
+            fail("Expected an exception");
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                    "Missing value at 1 [character 2 line 1]",
+                    e.getMessage());
+        }
+    }
+
+    /**
+     * A JSONObject must not be accepted as a key, neither as the first key,
+     * after a ',' separator, nor when a '\0' is smuggled in after the ','
+     * (CVE-2023-5072).
+     */
+    @Test
+    public void nestedObjectAsKeyIsRejected() {
+        try {
+            new JSONObject("{\"a\": 1, {\"foo\": \"bar\"}: \"baz\"}");
+            fail("Expected an exception");
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                    "Missing value at 9 [character 10 line 1]",
+                    e.getMessage());
+        }
+        try {
+            new JSONObject("{\"a\": 1, \0{\"foo\": \"bar\"}: \"baz\"}");
+            fail("Expected an exception");
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                    "A JSONObject text must end with '}' at 9 [character 10 line 1]",
+                    e.getMessage());
+        }
+        try {
+            new JSONObject("{{\"foo\": \"bar\"}: \"baz\"}");
+            fail("Expected an exception");
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                    "Missing value at 1 [character 2 line 1]",
+                    e.getMessage());
+        }
+    }
+
+    /**
+     * A small document that nests structures in key position must be
+     * rejected quickly instead of exhausting memory while every nested key
+     * is converted to an ever-growing escaped string (CVE-2023-5072).
+     */
+    @Test(timeout = 30000L)
+    public void nestedKeysDoNotExhaustMemory() {
+        String str = "1";
+        for (int i = 0; i < 30; i++) {
+            str = "[{\"a\":1," + str + ":1}]";
+        }
+        assertTrue("payload should be small", str.length() < 512);
+        try {
+            new JSONArray(str);
+            fail("Expected an exception");
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                    "Missing value at 8 [character 9 line 1]",
+                    e.getMessage());
+        }
+    }
+
+    /**
+     * Same as {@link #nestedKeysDoNotExhaustMemory()} but every nested key is
+     * preceded by a '\0' after the ',' separator (CVE-2023-5072).
+     */
+    @Test(timeout = 30000L)
+    public void nulSeparatedNestedKeysDoNotExhaustMemory() {
+        String str = "{\"b\":2}";
+        for (int i = 0; i < 30; i++) {
+            str = "{\"a\":1, \0" + str + ":1}";
+        }
+        assertTrue("payload should be small", str.length() < 512);
+        try {
+            new JSONObject(str);
+            fail("Expected an exception");
+        } catch (JSONException e) {
+            assertEquals("Expecting an exception message",
+                    "A JSONObject text must end with '}' at 8 [character 9 line 1]",
+                    e.getMessage());
+        }
     }
 }
